@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+.env
+
+# Data and Models (Too large for git)
+TRAINED_MODEL/
+IdeathonProject_v1/
+Source1_Usable-2/
+Ideathon_Run/
+test_imgs/
+inference_output/
+*.jpg
+*.png
+!logo.png
+
+# IDEs
+.vscode/
+.idea/
+.ipynb_checkpoints/
