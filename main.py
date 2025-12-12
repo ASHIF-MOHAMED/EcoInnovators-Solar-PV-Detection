@@ -38,10 +38,11 @@ def main():
         # Fetch from Satellite
         print(f"Fetching satellite view for {args.lat}, {args.lon}...")
         
-        # Calculate required radius (Buffer 2) - Buffer 2 is the largest extent we need
-        r2_m = area_to_radius_meters(sqft_to_sqmeters(BUFFER_2_SQFT))
+        # We fetch a larger context (50m radius = 100m wide) to help the model
+        # The buffer logic deals with the specific 2400 sq.ft area later
+        FETCH_RADIUS_METERS = 50.0 
         
-        pil_img, fetched_scale = fetch_satellite_image(args.lat, args.lon, radius_m=r2_m)
+        pil_img, fetched_scale = fetch_satellite_image(args.lat, args.lon, radius_m=FETCH_RADIUS_METERS)
         
         if pil_img:
             # Convert PIL to OpenCV (RGB -> BGR)
