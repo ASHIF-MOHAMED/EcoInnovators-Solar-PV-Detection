@@ -1,18 +1,62 @@
 import cv2
+import numpy as np
 import argparse
 import sys
+import os
 from src.predictor import SolarPredictor
-from src.geometry import analyze_buffers
+from src.geometry import analyze_buffers, sqft_to_sqmeters, area_to_radius_meters, BUFFER_2_SQFT
+from src.image_loader import fetch_satellite_image
 
 def main():
     parser = argparse.ArgumentParser(description="Solar Panel Buffer Detection CLI")
-    parser.add_argument("--image", required=True, help="Path to input image")
+    
+    # Input Group: Either Local Image OR Lat/Lon
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--image", help="Path to local input image")
+    group.add_argument("--lat", type=float, help="Latitude of the location")
+    
+    parser.add_argument("--lon", type=float, help="Longitude (required if --lat is used)")
     parser.add_argument("--model", required=True, help="Path to .pt model file")
-    parser.add_argument("--scale", type=float, default=0.15, help="Meters per pixel (default: 0.15)")
     
     args = parser.parse_args()
     
-    # 1. Prediction
+    # Validate Lat/Lon pairing
+    if args.lat and args.lon is None:
+        parser.error("--lon is required when --lat is specified.")
+
+    # 1. Load Image
+    img = None
+    scale = 0.15 # Default
+    
+    if args.image:
+        print(f"Loading local image: {args.image}")
+        img = cv2.imread(args.image)
+        if img is None:
+            print("Error: Could not read image file.")
+            return
+    else:
+        # Fetch from Satellite
+        print(f"Fetching satellite view for {args.lat}, {args.lon}...")
+        
+        # Calculate required radius (Buffer 2) - Buffer 2 is the largest extent we need
+        r2_m = area_to_radius_meters(sqft_to_sqmeters(BUFFER_2_SQFT))
+        
+        pil_img, fetched_scale = fetch_satellite_image(args.lat, args.lon, radius_m=r2_m)
+        
+        if pil_img:
+            # Convert PIL to OpenCV (RGB -> BGR)
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+            scale = fetched_scale
+            print(f"Image fetched successfully. Scale: {scale:.4f} m/px")
+            
+            # Save for debugging/record
+            cv2.imwrite("fetched_result.jpg", img)
+            print("Saved satellite view to fetched_result.jpg")
+        else:
+            print("Error: Failed to fetch satellite image.")
+            return
+
+    # 2. Prediction
     print(f"Loading model: {args.model}")
     try:
         predictor = SolarPredictor(args.model)
@@ -20,22 +64,16 @@ def main():
         print(f"Error loading model: {e}")
         return
 
-    print(f"Processing image: {args.image}")
-    img = cv2.imread(args.image)
-    if img is None:
-        print("Error: Could not read image.")
-        return
-        
     panels = predictor.predict(img)
     print(f"Detected {len(panels)} panels.")
     
-    # 2. Geometry Analysis
+    # 3. Geometry Analysis
     h, w = img.shape[:2]
-    cx, cy = w // 2, h // 2
+    cx, cy = w // 2, h // 2 # Target is always center for fetched images
     
-    result = analyze_buffers(cx, cy, panels, args.scale)
+    result = analyze_buffers(cx, cy, panels, scale)
     
-    # 3. Report
+    # 4. Report
     print("-" * 30)
     print(f"Status: {result['status']}")
     print(f"Total Area: {result['total_area_sqft']:.2f} sq.ft")
