@@ -17,7 +17,7 @@ A computer vision pipeline to detect solar panels and calculate their area withi
 
 1. **Clone the repository**
    ```bash
-   git clone <repo-url>
+   git clone https://github.com/ASHIF-MOHAMED/EcoInnovators-Solar-PV-Detection
    cd Ideathon-Solar-Detection
    ```
 
