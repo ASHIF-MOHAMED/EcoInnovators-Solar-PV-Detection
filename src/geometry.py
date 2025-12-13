@@ -1,4 +1,5 @@
 import math
+from shapely.ops import unary_union
 from shapely.geometry import Point, Polygon
 
 # FAQ Requirements
@@ -30,49 +31,80 @@ def get_buffer_radii(scale_mpp=METERS_PER_PIXEL_DEFAULT):
         "buffer_2_m": r2_m
     }
 
+def determine_qc_status(
+    detected,
+    total_area_sqft,
+    zone_id
+):
+    if not detected:
+        return "NOT_VERIFIABLE"
+
+    if total_area_sqft < 50:
+        return "NOT_VERIFIABLE"
+
+    if zone_id == 2:
+        return "VERIFIABLE"  # weaker confidence, but acceptable
+
+    return "VERIFIABLE"
+
+def merge_panels(panels):
+    """
+    Merges overlapping panel geometries to avoid double counting.
+    Returns a single geometry (Polygon or MultiPolygon) or None.
+    """
+    if not panels:
+        return None
+    return unary_union(panels)
+
 def analyze_buffers(center_x, center_y, panels, scale_mpp=METERS_PER_PIXEL_DEFAULT):
-    """
-    Core business logic: Checks intersection of panels with buffer zones.
-    Returns the status, valid panels, and total area.
-    """
     radii = get_buffer_radii(scale_mpp)
     center = Point(center_x, center_y)
-    
+
     buffer1_poly = center.buffer(radii["buffer_1_px"])
     buffer2_poly = center.buffer(radii["buffer_2_px"])
-    
-    status = "No Solar in Buffer"
-    valid_panels = []
-    zone_detected = 0 # 0=None, 1=Buffer1, 2=Buffer2
 
-    # 1. Check Buffer 1 (Priority)
-    detected_in_b1 = [p for p in panels if p.intersects(buffer1_poly)]
-    
-    if detected_in_b1:
-        status = "Found in Buffer 1 (1200 sq.ft)"
-        valid_panels = detected_in_b1
+    zone_detected = 0
+    valid_panels = []
+
+    detected_b1 = [p for p in panels if p.intersects(buffer1_poly)]
+    detected_b2 = [p for p in panels if p.intersects(buffer2_poly)]
+
+    if detected_b1:
+        valid_panels = detected_b1
         zone_detected = 1
+        status = "Found in Buffer 1 (High Confidence)"
+    elif detected_b2:
+        valid_panels = detected_b2
+        zone_detected = 2
+        status = "Found in Buffer 2 (Expanded Search)"
     else:
-        # 2. Check Buffer 2
-        detected_in_b2 = [p for p in panels if p.intersects(buffer2_poly)]
-        if detected_in_b2:
-            status = "Found in Buffer 2 (2400 sq.ft)"
-            valid_panels = detected_in_b2
-            zone_detected = 2
-            
-    # Calculate Total Area
-    total_px_area = sum(p.area for p in valid_panels)
-    total_sqm = total_px_area * (scale_mpp ** 2)
-    total_sqft = total_sqm * 10.7639
-    
+        status = "No Solar Detected"
+
+    merged_panels = merge_panels(valid_panels)
+
+    if merged_panels:
+        total_px_area = merged_panels.area
+        total_sqm = total_px_area * (scale_mpp ** 2)
+        total_sqft = total_sqm * 10.7639
+    else:
+        total_sqft = 0
+
+    qc_status = determine_qc_status(
+        detected=bool(valid_panels),
+        total_area_sqft=total_sqft,
+        zone_id=zone_detected
+    )
+
     return {
         "status": status,
         "zone_id": zone_detected,
-        "valid_panels": valid_panels,
+        "qc_status": qc_status,
         "total_area_sqft": total_sqft,
         "geometry": {
             "center": (center_x, center_y),
-            "r1": radii["buffer_1_px"],
-            "r2": radii["buffer_2_px"]
+            "buffer_1": buffer1_poly,
+            "buffer_2": buffer2_poly,
+            "merged_panels": merged_panels
         }
     }
+
