@@ -4,7 +4,7 @@ import argparse
 import sys
 import os
 from src.predictor import SolarPredictor
-from src.geometry import analyze_buffers, sqft_to_sqmeters, area_to_radius_meters, BUFFER_2_SQFT
+from src.geometry import analyze_buffers
 from src.image_loader import fetch_satellite_image
 
 def main():
@@ -66,7 +66,8 @@ def main():
         return
 
     panels = predictor.predict(img)
-    print(f"Detected {len(panels)} panels.")
+    print(f"Raw detections from model: {len(panels)}")
+
     
     # 3. Geometry Analysis
     h, w = img.shape[:2]
@@ -75,11 +76,33 @@ def main():
     result = analyze_buffers(cx, cy, panels, scale)
     
     # 4. Report
-    print("-" * 30)
-    print(f"Status: {result['status']}")
-    print(f"Total Area: {result['total_area_sqft']:.2f} sq.ft")
-    print(f"Valid Panels: {len(result['valid_panels'])}")
-    print("-" * 30)
+    print("-" * 40)
+    print(f"Status      : {result['status']}")
+    print(f"QC Status   : {result['qc_status']}")
+    print(f"Zone ID     : {result['zone_id']}")
+    print(f"Total Area  : {result['total_area_sqft']:.2f} sq.ft")
+    print("-" * 40)
+
+    import json
+
+    output = {
+        "status": result["status"],
+        "qc_status": result["qc_status"],
+        "zone_id": result["zone_id"],
+        "total_area_sqft": round(result["total_area_sqft"], 2),
+        "assumptions": {
+            "meters_per_pixel": scale,
+            "buffer_1_sqft": 1200,
+            "buffer_2_sqft": 2400
+        }
+    }
+
+    with open("output_result.json", "w") as f:
+        json.dump(output, f, indent=2)
+
+    print("Saved results to output_result.json")
+
+
 
 if __name__ == "__main__":
     main()
