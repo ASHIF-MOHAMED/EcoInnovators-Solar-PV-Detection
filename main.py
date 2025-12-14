@@ -3,9 +3,13 @@ import numpy as np
 import argparse
 import sys
 import os
+import json
+from datetime import datetime
 from src.predictor import SolarPredictor
 from src.geometry import analyze_buffers
 from src.image_loader import fetch_satellite_image
+from src.quality_checker import ImageQualityChecker
+from src.visualizer import BufferVisualizer
 
 def main():
     parser = argparse.ArgumentParser(description="Solar Panel Buffer Detection CLI")
@@ -17,6 +21,7 @@ def main():
     
     parser.add_argument("--lon", type=float, help="Longitude (required if --lat is used)")
     parser.add_argument("--model", required=True, help="Path to .pt model file")
+    parser.add_argument("--sample-id", type=int, help="Sample ID for output (auto-generated if not provided)")
     
     args = parser.parse_args()
     
@@ -24,13 +29,22 @@ def main():
     if args.lat and args.lon is None:
         parser.error("--lon is required when --lat is specified.")
 
+    # Generate sample_id if not provided
+    sample_id = args.sample_id if args.sample_id else int(datetime.now().timestamp())
+    
+    # Store coordinates
+    latitude = args.lat if args.lat else None
+    longitude = args.lon if args.lon else None
+
     # 1. Load Image
     img = None
     scale = 0.15 # Default
+    image_source = None
     
     if args.image:
         print(f"Loading local image: {args.image}")
         img = cv2.imread(args.image)
+        image_source = "local"
         if img is None:
             print("Error: Could not read image file.")
             return
@@ -48,6 +62,7 @@ def main():
             # Convert PIL to OpenCV (RGB -> BGR)
             img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
             scale = fetched_scale
+            image_source = "Google Maps"
             print(f"Image fetched successfully. Scale: {scale:.4f} m/px")
             
             # Save for debugging/record
@@ -57,7 +72,48 @@ def main():
             print("Error: Failed to fetch satellite image.")
             return
 
-    # 2. Prediction
+    # 2. Image Quality Check
+    print("Checking image quality...")
+    quality_checker = ImageQualityChecker(cloud_threshold=0.3, blur_threshold=100)
+    is_verifiable, reason, metrics = quality_checker.is_verifiable(img)
+    
+    print(f"Quality Check: {reason}")
+    print(f"Metrics: {metrics}")
+    
+    if not is_verifiable:
+        print(f"⚠️  Image marked as NOT_VERIFIABLE: {reason}")
+        
+        # Extended output format for NOT_VERIFIABLE
+        output = {
+            "sample_id": sample_id,
+            "lat": round(latitude, 4) if latitude else None,
+            "lon": round(longitude, 4) if longitude else None,
+            "has_solar": False,
+            "confidence": 0.0,
+            "pv_area_sqm_est": 0,
+            "buffer_radius_sqft": 2400,
+            "qc_status": "NOT_VERIFIABLE",
+            "bbox_or_mask": "N/A",
+            "image_metadata": {
+                "source": image_source,
+                "capture_date": datetime.now().strftime("%Y-%m-%d")
+            }
+        }
+        
+        # Save result and exit
+        with open("output_result.json", "w") as f:
+            json.dump(output, f, indent=2)
+        print("Saved results to output_result.json")
+        print(f"\n📊 Output Format:")
+        print(f"   sample_id: {sample_id}")
+        print(f"   has_solar: False")
+        print(f"   buffer_radius_sqft: 2400")
+        print(f"   pv_area_sqm_est: 0 sqm")
+        print(f"   qc_status: NOT_VERIFIABLE")
+        print(f"   Reason: {reason}")
+        return
+    
+    # 3. Prediction
     print(f"Loading model: {args.model}")
     try:
         predictor = SolarPredictor(args.model)
@@ -67,15 +123,39 @@ def main():
 
     panels = predictor.predict(img)
     print(f"Raw detections from model: {len(panels)}")
-
     
-    # 3. Geometry Analysis
+    # Calculate average confidence from detected panels
+    avg_confidence = 0.0
+    if panels:
+        confidences = [p['confidence'] for p in panels if isinstance(p, dict)]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+    
+    # 4. Geometry Analysis
     h, w = img.shape[:2]
     cx, cy = w // 2, h // 2 # Target is always center for fetched images
     
     result = analyze_buffers(cx, cy, panels, scale)
     
-    # 4. Report
+    # 5. Visualization
+    print("Creating visualization...")
+    visualizer = BufferVisualizer()
+    vis_image = visualizer.create_visualization(
+        image=img,
+        cx=cx,
+        cy=cy,
+        panels=panels,
+        scale=scale,
+        result=result,
+        valid_panel_indices=result.get('valid_panel_indices', []),
+        quality_metrics=metrics
+    )
+    
+    # Save visualization with sample_id in filename
+    vis_filename = f"output_visualization_sample_{sample_id}.jpg"
+    cv2.imwrite(vis_filename, vis_image)
+    print(f"🖼️  Saved visualization to {vis_filename}")
+    
+    # 6. Report
     print("-" * 40)
     print(f"Status      : {result['status']}")
     print(f"QC Status   : {result['qc_status']}")
@@ -83,24 +163,69 @@ def main():
     print(f"Total Area  : {result['total_area_sqft']:.2f} sq.ft")
     print("-" * 40)
 
-    import json
-
+    # Convert to extended output format
+    has_solar = result['zone_id'] > 0
+    buffer_radius_sqft = 1200 if result['zone_id'] == 1 else 2400
+    
+    # Convert area from sqft to sqm
+    pv_area_sqm_est = result['total_area_sqft'] * 0.092903
+    
+    # Determine reason code based on detection
+    reason_code = "no_solar_detected"
+    if has_solar:
+        # Generate reason codes for positive detections
+        num_panels = len(result.get('valid_panel_indices', []))
+        if num_panels > 3:
+            reason_code = "module_grid"
+        elif num_panels > 1:
+            reason_code = "rectilinear_array"
+        else:
+            reason_code = "single_panel"
+    
+    # Encode bbox or mask information
+    bbox_or_mask = "encoded polygon or bbox"
+    if panels and len(result.get('valid_panel_indices', [])) > 0:
+        # Get the first valid panel's polygon as representative
+        valid_idx = result['valid_panel_indices'][0]
+        if valid_idx < len(panels):
+            panel = panels[valid_idx]
+            polygon = panel['polygon'] if isinstance(panel, dict) else panel
+            # Get polygon bounds
+            bounds = polygon.bounds  # (minx, miny, maxx, maxy)
+            bbox_or_mask = f"polygon_bounds_{int(bounds[2]-bounds[0])}x{int(bounds[3]-bounds[1])}"
+    
+    # Extended output format
     output = {
-        "status": result["status"],
+        "sample_id": sample_id,
+        "lat": round(latitude, 4) if latitude else None,
+        "lon": round(longitude, 4) if longitude else None,
+        "has_solar": has_solar,
+        "confidence": round(avg_confidence, 2),
+        "pv_area_sqm_est": round(pv_area_sqm_est, 2),
+        "buffer_radius_sqft": buffer_radius_sqft,
         "qc_status": result["qc_status"],
-        "zone_id": result["zone_id"],
-        "total_area_sqft": round(result["total_area_sqft"], 2),
-        "assumptions": {
-            "meters_per_pixel": scale,
-            "buffer_1_sqft": 1200,
-            "buffer_2_sqft": 2400
+        "bbox_or_mask": bbox_or_mask,
+        "image_metadata": {
+            "source": image_source,
+            "capture_date": datetime.now().strftime("%Y-%m-%d")
         }
     }
 
-    with open("output_result.json", "w") as f:
+    # Save JSON output
+    json_filename = f"output_result_sample_{sample_id}.json"
+    with open(json_filename, "w") as f:
         json.dump(output, f, indent=2)
 
-    print("Saved results to output_result.json")
+    print(f"Saved results to {json_filename}")
+    print(f"\n📊 Output Summary:")
+    print(f"   sample_id: {sample_id}")
+    print(f"   lat: {latitude}, lon: {longitude}")
+    print(f"   has_solar: {has_solar}")
+    print(f"   confidence: {avg_confidence:.2f}")
+    print(f"   buffer_radius_sqft: {buffer_radius_sqft}")
+    print(f"   pv_area_sqm_est: {pv_area_sqm_est:.2f} sqm")
+    print(f"   qc_status: {result['qc_status']}")
+    print(f"   visualization: {vis_filename}")
 
 
 

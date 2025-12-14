@@ -66,8 +66,11 @@ def analyze_buffers(center_x, center_y, panels, scale_mpp=METERS_PER_PIXEL_DEFAU
     zone_detected = 0
     valid_panels = []
 
-    detected_b1 = [p for p in panels if p.intersects(buffer1_poly)]
-    detected_b2 = [p for p in panels if p.intersects(buffer2_poly)]
+    # Extract polygons from panel dictionaries
+    panel_polygons = [p['polygon'] if isinstance(p, dict) else p for p in panels]
+    
+    detected_b1 = [p for p in panel_polygons if p.intersects(buffer1_poly)]
+    detected_b2 = [p for p in panel_polygons if p.intersects(buffer2_poly)]
 
     if detected_b1:
         valid_panels = detected_b1
@@ -95,11 +98,19 @@ def analyze_buffers(center_x, center_y, panels, scale_mpp=METERS_PER_PIXEL_DEFAU
         zone_id=zone_detected
     )
 
+    # Get indices of valid panels
+    valid_panel_indices = []
+    if valid_panels:
+        for panel in valid_panels:
+            if panel in panel_polygons:
+                valid_panel_indices.append(panel_polygons.index(panel))
+    
     return {
         "status": status,
         "zone_id": zone_detected,
         "qc_status": qc_status,
         "total_area_sqft": total_sqft,
+        "valid_panel_indices": valid_panel_indices,
         "geometry": {
             "center": (center_x, center_y),
             "buffer_1": buffer1_poly,

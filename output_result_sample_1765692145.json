@@ -1,0 +1,15 @@
+{
+  "sample_id": 1765692145,
+  "lat": 12.9903,
+  "lon": 80.2422,
+  "has_solar": true,
+  "confidence": 0.42,
+  "pv_area_sqm_est": 51.07,
+  "buffer_radius_sqft": 1200,
+  "qc_status": "VERIFIABLE",
+  "bbox_or_mask": "polygon_bounds_47x37",
+  "image_metadata": {
+    "source": "Google Maps",
+    "capture_date": "2025-12-14"
+  }
+}
