@@ -12,7 +12,7 @@ from src.quality_checker import ImageQualityChecker
 from src.geometry import analyze_buffers
 from src.visualizer import BufferVisualizer
 
-# Defaults (can be overridden via CLI)
+
 MODEL_PATH = "TRAINED_MODEL/detection_model.pt"
 INPUT_XLSX = "input_samples.xlsx"
 OUTPUT_DIR = "batch_output"
@@ -43,7 +43,7 @@ def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
         }
     }
 
-    # Fetch image
+   
     pil_img, scale = fetch_satellite_image(lat, lon, radius_m=FETCH_RADIUS_METERS)
     if pil_img is None:
         out["qc_status"] = "NOT_VERIFIABLE"
@@ -53,10 +53,10 @@ def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
     img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
     out["image_metadata"]["source"] = "Google Maps"
 
-    # Quality check
+    
     is_verifiable, reason, metrics = quality_checker.is_verifiable(img)
 
-    # Map quality reason to qc_status
+  
     if not is_verifiable:
         reason_map = {
             "heavy_cloud": "cloud_coverage",
@@ -67,15 +67,15 @@ def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
         }
         qc_reason = reason_map.get(reason, "image_quality")
         out["qc_status"] = f"NOT_VERIFIABLE ({qc_reason})"
-        # still return minimal record
+      
         return out
 
-    # Predict
+   
     panels = predictor.predict(img)
     confidences = [p.get('confidence', 0.0) for p in panels if isinstance(p, dict)]
     avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
 
-    # Geometry analysis
+   
     h, w = img.shape[:2]
     cx, cy = w // 2, h // 2
     result = analyze_buffers(
@@ -86,7 +86,6 @@ def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
         contrast=metrics.get('contrast', 0.0)
     )
 
-    # Visualization
     vis = visualizer.create_visualization(
         image=img,
         cx=cx,
@@ -101,7 +100,6 @@ def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
     vis_filename = os.path.join(OUTPUT_DIR, f"viz_{sample_id}.jpg")
     cv2.imwrite(vis_filename, vis)
 
-    # Fill outputs
     out["has_solar"] = result['zone_id'] > 0
     out["confidence"] = round(avg_conf, 2)
     out["pv_area_sqm_est"] = round(result.get('total_area_sqm', 0.0), 2)
@@ -109,10 +107,7 @@ def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
     out["qc_status"] = map_qc_base(result.get('qc_status'))
 
     polygon_masks = result.get('polygon_masks', [])
-    if polygon_masks:
-        out["bbox_or_mask"] = polygon_masks
-    else:
-        out["bbox_or_mask"] = "segmentation_mask"
+    out["bbox_or_mask"] = "segmentation_mask"
 
     out["image_metadata"]["capture_date"] = datetime.now().strftime("%Y-%m-%d")
 
@@ -127,7 +122,6 @@ def main():
     parser.add_argument("--radius", "-r", type=float, default=FETCH_RADIUS_METERS, help="Fetch radius in meters for satellite image")
     args = parser.parse_args()
 
-    # Read input table (support .xlsx/.xls/.csv/.txt)
     input_path = args.input
     ext = os.path.splitext(input_path)[1].lower()
     if ext in ['.xls', '.xlsx']:
@@ -137,17 +131,15 @@ def main():
     else:
         raise ValueError(f"Unsupported input format: {ext}")
 
-    # Prepare output dir
     os.makedirs(args.output, exist_ok=True)
 
-    # Load helpers once
+    
     predictor = SolarPredictor(args.model)
     quality_checker = ImageQualityChecker(cloud_threshold=0.3, blur_threshold=100)
     visualizer = BufferVisualizer()
 
     results = []
 
-    # Expect columns: sample_id, lat, lon
     required_cols = ['sample_id', 'lat', 'lon']
     missing = [c for c in required_cols if c not in df.columns]
     if missing:

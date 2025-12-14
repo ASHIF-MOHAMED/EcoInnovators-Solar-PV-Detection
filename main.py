@@ -140,10 +140,8 @@ def main():
         confidences = [p['confidence'] for p in panels if isinstance(p, dict)]
         avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
     
-    # 4. Geometry Analysis
     h, w = img.shape[:2]
-    cx, cy = w // 2, h // 2 # Target is always center for fetched images
-    
+    cx, cy = w // 2, h // 2 
     result = analyze_buffers(
         cx, cy, panels, scale,
         cloud_coverage=metrics.get('cloud_coverage', 0.0),
@@ -152,7 +150,6 @@ def main():
         contrast=metrics.get('contrast', 50.0)
     )
     
-    # 5. Visualization
     print("Creating visualization...")
     visualizer = BufferVisualizer()
     vis_image = visualizer.create_visualization(
@@ -166,12 +163,10 @@ def main():
         quality_metrics=metrics
     )
     
-    # Save visualization with sample_id in filename
     vis_filename = f"output_visualization_sample_{sample_id}.jpg"
     cv2.imwrite(vis_filename, vis_image)
     print(f"🖼️  Saved visualization to {vis_filename}")
     
-    # 6. Report
     print("-" * 60)
     print(f"Status           : {result['status']}")
     print(f"QC Status        : {result['qc_status']}")
@@ -181,11 +176,9 @@ def main():
     print(f"Total Area (sqft): {result['total_area_sqft']:.2f} sqft")
     print("-" * 60)
 
-    # Calculate Capacity
     WATT_PEAK_PER_M2 = 150
     capacity_kw = (result['total_area_sqm'] * WATT_PEAK_PER_M2) / 1000
     
-    # Determine reason code based on detection
     reason_code = "no_solar_detected"
     if result['panel_count'] > 0:
         if result['panel_count'] >= 3 and result['zone_id'] == 1:
@@ -197,7 +190,6 @@ def main():
         elif avg_confidence < 0.5:
             reason_code = "low_confidence"
     
-    # Calibrate confidence level
     if avg_confidence > 0.7:
         confidence_level = "HIGH"
     elif avg_confidence > 0.3:
@@ -205,14 +197,10 @@ def main():
     else:
         confidence_level = "LOW"
     
-    # Create polygon masks output format
     polygon_masks = result.get('polygon_masks', [])
     
-    # Determine bbox or mask representation
     bbox_or_mask = "polygon_mask"
         
-    
-    # Extended output format with all governance requirements
     output = {
         "sample_id": sample_id,
         "lat": round(latitude, 4) if latitude else None,
@@ -229,7 +217,6 @@ def main():
         }
     }
 
-    # Save JSON output
     json_filename = f"output_result_sample_{sample_id}.json"
     with open(json_filename, "w") as f:
         json.dump(output, f, indent=2)

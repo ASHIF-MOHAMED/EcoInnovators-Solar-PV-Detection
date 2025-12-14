@@ -2,11 +2,9 @@ import math
 from shapely.ops import unary_union
 from shapely.geometry import Point, Polygon
 
-# FAQ Requirements
 BUFFER_1_SQFT = 1200
 BUFFER_2_SQFT = 2400
 
-# Constants
 METERS_PER_PIXEL_DEFAULT = 0.15
 
 def sqft_to_sqmeters(sqft):
@@ -48,27 +46,19 @@ def determine_qc_status(
     NOT_VERIFIABLE (reason): Insufficient evidence (shadow, cloud, blur, etc)
     """
     
-    # Check image quality FIRST
-    # If image quality is poor, it's NOT_VERIFIABLE regardless of detection
-    
-    # Cloud coverage > 30% = NOT_VERIFIABLE
+   
     if cloud_coverage > 0.3:
         return "NOT_VERIFIABLE (cloud_coverage)"
     
-    # Blur score < 50 = blurry image = NOT_VERIFIABLE
     if blur_score < 50:
         return "NOT_VERIFIABLE (blur)"
     
-    # Brightness too low (< 20) or too high (> 250) = NOT_VERIFIABLE
     if brightness < 20 or brightness > 250:
         return "NOT_VERIFIABLE (brightness)"
     
-    # Contrast too low (< 30) = NOT_VERIFIABLE
     if contrast < 30:
         return "NOT_VERIFIABLE (contrast)"
     
-    # If image quality is GOOD, then it's VERIFIABLE
-    # Include whether solar is present or not present
     if detected:
         return "VERIFIABLE (present)"
     else:
@@ -94,7 +84,6 @@ def analyze_buffers(center_x, center_y, panels, scale_mpp=METERS_PER_PIXEL_DEFAU
     zone_detected = 0
     valid_panels = []
 
-    # Extract polygons from panel dictionaries
     panel_polygons = [p['polygon'] if isinstance(p, dict) else p for p in panels]
     
     detected_b1 = [p for p in panel_polygons if p.intersects(buffer1_poly)]
@@ -130,7 +119,6 @@ def analyze_buffers(center_x, center_y, panels, scale_mpp=METERS_PER_PIXEL_DEFAU
         contrast=contrast
     )
 
-    # Get indices of valid panels
     valid_panel_indices = []
     valid_panel_areas_sqm = []
     polygon_masks = []
@@ -141,16 +129,13 @@ def analyze_buffers(center_x, center_y, panels, scale_mpp=METERS_PER_PIXEL_DEFAU
                 idx = panel_polygons.index(panel)
                 valid_panel_indices.append(idx)
                 
-                # Calculate individual panel area in sqm
                 panel_area_px = panel.area
                 panel_area_sqm = panel_area_px * (scale_mpp ** 2)
                 valid_panel_areas_sqm.append(panel_area_sqm)
                 
-                # Export polygon coordinates (rounded to integers)
                 coords = [[int(x), int(y)] for x, y in panel.exterior.coords[:-1]]
                 polygon_masks.append(coords)
     
-    # Calculate statistics
     panel_count = len(valid_panels)
     avg_panel_area_sqm = sum(valid_panel_areas_sqm) / panel_count if panel_count > 0 else 0.0
     max_panel_area_sqm = max(valid_panel_areas_sqm) if valid_panel_areas_sqm else 0.0
