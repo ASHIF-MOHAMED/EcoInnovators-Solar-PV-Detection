@@ -32,21 +32,15 @@ def fetch_satellite_image(lat, lon, radius_m, meters_per_pixel=0.15, max_dim=204
     """
     Fetches satellite imagery by stitching XYZ tiles.
     """
-    # 1. Determine Zoom Level based on desired resolution
-    # Resolution (m/px) = 156543.03 * cos(lat) / (2^zoom)
-    # 0.15 m/px ~= Zoom 19
     target_scale = meters_per_pixel
     lat_rad = math.radians(lat)
-    # solve for zoom: scale = C * cos(lat) / 2^z  => 2^z = C * cos(lat) / scale
-    zoom = int(math.log2(156543.03 * math.cos(lat_rad) / target_scale))
-    zoom = min(zoom, 19) # Cap at 19 (standard max for most free layers)
     
+    zoom = int(math.log2(156543.03 * math.cos(lat_rad) / target_scale))
+    zoom = min(zoom, 19) 
     print(f"Fetching tiles at Zoom: {zoom}")
 
-    # 2. Calculate Tile Coordinates
     xtile, ytile = latlon_to_tile(lat, lon, zoom)
     
-    # We fetch a 3x3 grid centered on the target to ensure safe coverage
     tiles = []
     min_x, max_x = xtile - 1, xtile + 1
     min_y, max_y = ytile - 1, ytile + 1
@@ -74,7 +68,6 @@ def fetch_satellite_image(lat, lon, radius_m, meters_per_pixel=0.15, max_dim=204
             except Exception as e:
                 print(f"Failed to fetch tile {x},{y}: {e}")
 
-    # 3. Crop to the target area
     tl_lat, tl_lon = tile_to_latlon(min_x, min_y, zoom)
     n = 2.0 ** zoom
     
@@ -91,7 +84,7 @@ def fetch_satellite_image(lat, lon, radius_m, meters_per_pixel=0.15, max_dim=204
     center_px_x = target_gx - tl_gx
     center_px_y = target_gy - tl_gy
     
-    # Crop box size
+    
     box_radius_px = int(radius_m * 2.0 / target_scale) 
     crop_size = box_radius_px * 2
     
