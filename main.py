@@ -209,9 +209,8 @@ def main():
     polygon_masks = result.get('polygon_masks', [])
     
     # Determine bbox or mask representation
-    bbox_or_mask = "N/A"
-    if polygon_masks:
-        bbox_or_mask = f"polygon_array_with_{result['panel_count']}_panels"
+    bbox_or_mask = "polygon_mask"
+        
     
     # Extended output format with all governance requirements
     output = {
