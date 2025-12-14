@@ -229,7 +229,6 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 For issues or questions:
 - Open an issue on GitHub
 - Check existing documentation in `NON_VERIFIABLE_IMAGES_GUIDE.md`
-- Review `Model_Tester.ipynb` for development examples
 
 ---
 
