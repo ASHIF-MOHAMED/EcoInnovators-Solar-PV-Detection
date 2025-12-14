@@ -83,6 +83,16 @@ def main():
     if not is_verifiable:
         print(f"⚠️  Image marked as NOT_VERIFIABLE: {reason}")
         
+        # Map reason codes to specific QC status reasons
+        reason_map = {
+            "heavy_cloud": "cloud_coverage",
+            "low_resolution": "blur",
+            "heavy_shadow": "brightness",
+            "overexposed": "brightness",
+            "low_contrast": "contrast"
+        }
+        qc_reason = reason_map.get(reason, "image_quality")
+        
         # Extended output format for NOT_VERIFIABLE
         output = {
             "sample_id": sample_id,
@@ -92,7 +102,7 @@ def main():
             "confidence": 0.0,
             "pv_area_sqm_est": 0,
             "buffer_radius_sqft": 2400,
-            "qc_status": "NOT_VERIFIABLE",
+            "qc_status": f"NOT_VERIFIABLE ({qc_reason})",
             "bbox_or_mask": "N/A",
             "image_metadata": {
                 "source": image_source,
@@ -134,7 +144,13 @@ def main():
     h, w = img.shape[:2]
     cx, cy = w // 2, h // 2 # Target is always center for fetched images
     
-    result = analyze_buffers(cx, cy, panels, scale)
+    result = analyze_buffers(
+        cx, cy, panels, scale,
+        cloud_coverage=metrics.get('cloud_coverage', 0.0),
+        blur_score=metrics.get('blur_score', 100.0),
+        brightness=metrics.get('brightness', 50.0),
+        contrast=metrics.get('contrast', 50.0)
+    )
     
     # 5. Visualization
     print("Creating visualization...")
@@ -156,58 +172,85 @@ def main():
     print(f"🖼️  Saved visualization to {vis_filename}")
     
     # 6. Report
-    print("-" * 40)
-    print(f"Status      : {result['status']}")
-    print(f"QC Status   : {result['qc_status']}")
-    print(f"Zone ID     : {result['zone_id']}")
-    print(f"Total Area  : {result['total_area_sqft']:.2f} sq.ft")
-    print("-" * 40)
+    print("-" * 60)
+    print(f"Status           : {result['status']}")
+    print(f"QC Status        : {result['qc_status']}")
+    print(f"Zone ID          : {result['zone_id']}")
+    print(f"Panel Count      : {result['panel_count']}")
+    print(f"Total Area (sqm) : {result['total_area_sqm']:.2f} sqm")
+    print(f"Total Area (sqft): {result['total_area_sqft']:.2f} sqft")
+    print("-" * 60)
 
-    # Convert to extended output format
-    has_solar = result['zone_id'] > 0
-    buffer_radius_sqft = 1200 if result['zone_id'] == 1 else 2400
-    
-    # Convert area from sqft to sqm
-    pv_area_sqm_est = result['total_area_sqft'] * 0.092903
+    # Calculate Capacity
+    WATT_PEAK_PER_M2 = 150
+    capacity_kw = (result['total_area_sqm'] * WATT_PEAK_PER_M2) / 1000
     
     # Determine reason code based on detection
     reason_code = "no_solar_detected"
-    if has_solar:
-        # Generate reason codes for positive detections
-        num_panels = len(result.get('valid_panel_indices', []))
-        if num_panels > 3:
-            reason_code = "module_grid"
-        elif num_panels > 1:
+    if result['panel_count'] > 0:
+        if result['panel_count'] >= 3 and result['zone_id'] == 1:
+            reason_code = "clear_array"
+        elif result['panel_count'] >= 2:
             reason_code = "rectilinear_array"
-        else:
+        elif result['panel_count'] == 1:
             reason_code = "single_panel"
+        elif avg_confidence < 0.5:
+            reason_code = "low_confidence"
     
-    # Encode bbox or mask information
-    bbox_or_mask = "encoded polygon or bbox"
-    if panels and len(result.get('valid_panel_indices', [])) > 0:
-        # Get the first valid panel's polygon as representative
-        valid_idx = result['valid_panel_indices'][0]
-        if valid_idx < len(panels):
-            panel = panels[valid_idx]
-            polygon = panel['polygon'] if isinstance(panel, dict) else panel
-            # Get polygon bounds
-            bounds = polygon.bounds  # (minx, miny, maxx, maxy)
-            bbox_or_mask = f"polygon_bounds_{int(bounds[2]-bounds[0])}x{int(bounds[3]-bounds[1])}"
+    # Calibrate confidence level
+    if avg_confidence > 0.7:
+        confidence_level = "HIGH"
+    elif avg_confidence > 0.3:
+        confidence_level = "MEDIUM"
+    else:
+        confidence_level = "LOW"
     
-    # Extended output format
+    # Create polygon masks output format
+    polygon_masks = result.get('polygon_masks', [])
+    
+    # Determine bbox or mask representation
+    bbox_or_mask = "N/A"
+    if polygon_masks:
+        bbox_or_mask = f"polygon_array_with_{result['panel_count']}_panels"
+    
+    # Extended output format with all governance requirements
     output = {
         "sample_id": sample_id,
         "lat": round(latitude, 4) if latitude else None,
         "lon": round(longitude, 4) if longitude else None,
-        "has_solar": has_solar,
+        "has_solar": result['zone_id'] > 0,
         "confidence": round(avg_confidence, 2),
-        "pv_area_sqm_est": round(pv_area_sqm_est, 2),
-        "buffer_radius_sqft": buffer_radius_sqft,
+        "pv_area_sqm_est": round(result['total_area_sqm'], 2),
+        "panel_count": result['panel_count'],
+        "avg_panel_area_m2": round(result['avg_panel_area_sqm'], 2),
+        "max_panel_area_m2": round(result['max_panel_area_sqm'], 2),
+        "min_panel_area_m2": round(result['min_panel_area_sqm'], 2),
+        "capacity_kw": round(capacity_kw, 2),
+        "buffer_radius_sqft": 1200 if result['zone_id'] == 1 else 2400,
         "qc_status": result["qc_status"],
+        "reason_code": reason_code,
         "bbox_or_mask": bbox_or_mask,
+        "polygon_masks": polygon_masks,
+        "detection_details": {
+            "raw_detections": len(panels),
+            "valid_panels": result['panel_count'],
+            "avg_panel_area_m2": round(result['avg_panel_area_sqm'], 2),
+            "largest_panel_m2": round(result['max_panel_area_sqm'], 2),
+            "smallest_panel_m2": round(result['min_panel_area_sqm'], 2),
+            "image_quality_score": metrics.get('quality_score', 0.0)
+        },
+        "assumptions": {
+            "watt_peak_per_m2": WATT_PEAK_PER_M2,
+            "meters_per_pixel": round(scale, 4),
+            "buffer_1_sqft": 1200,
+            "buffer_2_sqft": 2400
+        },
         "image_metadata": {
             "source": image_source,
-            "capture_date": datetime.now().strftime("%Y-%m-%d")
+            "capture_date": datetime.now().strftime("%Y-%m-%d"),
+            "zoom_level": 18,
+            "meters_per_pixel": round(scale, 4),
+            "image_dimensions": f"{img.shape[1]}x{img.shape[0]}"
         }
     }
 
@@ -220,10 +263,12 @@ def main():
     print(f"\n📊 Output Summary:")
     print(f"   sample_id: {sample_id}")
     print(f"   lat: {latitude}, lon: {longitude}")
-    print(f"   has_solar: {has_solar}")
+    print(f"   has_solar: {result['zone_id'] > 0}")
+    print(f"   panel_count: {result['panel_count']}")
+    print(f"   pv_area_sqm: {result['total_area_sqm']:.2f}")
+    print(f"   capacity_kw: {capacity_kw:.2f}")
     print(f"   confidence: {avg_confidence:.2f}")
-    print(f"   buffer_radius_sqft: {buffer_radius_sqft}")
-    print(f"   pv_area_sqm_est: {pv_area_sqm_est:.2f} sqm")
+    print(f"   reason_code: {reason_code}")
     print(f"   qc_status: {result['qc_status']}")
     print(f"   visualization: {vis_filename}")
 
