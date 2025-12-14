@@ -29,12 +29,13 @@ venv/
 .vscode/
 .idea/
 
-# Local Output Files (don't commit every test run)
+# Local Output Files
 output_visualization_sample_*.jpg
 output_result_sample_*.json
 fetched_result.jpg
 output_result.json
 output_visualization.jpg
+batch_output/
 
 # OS
 .DS_Store
