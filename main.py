@@ -220,36 +220,12 @@ def main():
         "has_solar": result['zone_id'] > 0,
         "confidence": round(avg_confidence, 2),
         "pv_area_sqm_est": round(result['total_area_sqm'], 2),
-        "panel_count": result['panel_count'],
-        "avg_panel_area_m2": round(result['avg_panel_area_sqm'], 2),
-        "max_panel_area_m2": round(result['max_panel_area_sqm'], 2),
-        "min_panel_area_m2": round(result['min_panel_area_sqm'], 2),
-        "capacity_kw": round(capacity_kw, 2),
         "buffer_radius_sqft": 1200 if result['zone_id'] == 1 else 2400,
         "qc_status": result["qc_status"],
-        "reason_code": reason_code,
         "bbox_or_mask": bbox_or_mask,
-        "polygon_masks": polygon_masks,
-        "detection_details": {
-            "raw_detections": len(panels),
-            "valid_panels": result['panel_count'],
-            "avg_panel_area_m2": round(result['avg_panel_area_sqm'], 2),
-            "largest_panel_m2": round(result['max_panel_area_sqm'], 2),
-            "smallest_panel_m2": round(result['min_panel_area_sqm'], 2),
-            "image_quality_score": metrics.get('quality_score', 0.0)
-        },
-        "assumptions": {
-            "watt_peak_per_m2": WATT_PEAK_PER_M2,
-            "meters_per_pixel": round(scale, 4),
-            "buffer_1_sqft": 1200,
-            "buffer_2_sqft": 2400
-        },
         "image_metadata": {
             "source": image_source,
-            "capture_date": datetime.now().strftime("%Y-%m-%d"),
-            "zoom_level": 18,
-            "meters_per_pixel": round(scale, 4),
-            "image_dimensions": f"{img.shape[1]}x{img.shape[0]}"
+            "capture_date": datetime.now().strftime("%Y-%m-%d")
         }
     }
 
