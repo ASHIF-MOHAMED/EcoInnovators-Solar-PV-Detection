@@ -1,108 +1,168 @@
+import os
+import json
 import cv2
 import numpy as np
 import argparse
-import sys
-import os
+from datetime import datetime
+import pandas as pd
+from openpyxl import load_workbook
 from src.predictor import SolarPredictor
-from src.geometry import analyze_buffers
 from src.image_loader import fetch_satellite_image
+from src.quality_checker import ImageQualityChecker
+from src.geometry import analyze_buffers
+from src.visualizer import BufferVisualizer
 
-def main():
-    parser = argparse.ArgumentParser(description="Solar Panel Buffer Detection CLI")
-    
-    # Input Group: Either Local Image OR Lat/Lon
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--image", help="Path to local input image")
-    group.add_argument("--lat", type=float, help="Latitude of the location")
-    
-    parser.add_argument("--lon", type=float, help="Longitude (required if --lat is used)")
-    parser.add_argument("--model", required=True, help="Path to .pt model file")
-    
-    args = parser.parse_args()
-    
-    # Validate Lat/Lon pairing
-    if args.lat and args.lon is None:
-        parser.error("--lon is required when --lat is specified.")
 
-    # 1. Load Image
-    img = None
-    scale = 0.15 # Default
-    
-    if args.image:
-        print(f"Loading local image: {args.image}")
-        img = cv2.imread(args.image)
-        if img is None:
-            print("Error: Could not read image file.")
-            return
-    else:
-        # Fetch from Satellite
-        print(f"Fetching satellite view for {args.lat}, {args.lon}...")
-        
-        # We fetch a larger context (50m radius = 100m wide) to help the model
-        # The buffer logic deals with the specific 2400 sq.ft area later
-        FETCH_RADIUS_METERS = 50.0 
-        
-        pil_img, fetched_scale = fetch_satellite_image(args.lat, args.lon, radius_m=FETCH_RADIUS_METERS)
-        
-        if pil_img:
-            # Convert PIL to OpenCV (RGB -> BGR)
-            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-            scale = fetched_scale
-            print(f"Image fetched successfully. Scale: {scale:.4f} m/px")
-            
-            # Save for debugging/record
-            cv2.imwrite("fetched_result.jpg", img)
-            print("Saved satellite view to fetched_result.jpg")
-        else:
-            print("Error: Failed to fetch satellite image.")
-            return
+MODEL_PATH = "TRAINED_MODEL/detection_model.pt"
+INPUT_XLSX = "input_samples.xlsx"
+OUTPUT_DIR = "batch_output"
+FETCH_RADIUS_METERS = 50.0
 
-    # 2. Prediction
-    print(f"Loading model: {args.model}")
-    try:
-        predictor = SolarPredictor(args.model)
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    panels = predictor.predict(img)
-    print(f"Raw detections from model: {len(panels)}")
+def map_qc_base(qc_status_str):
+    if qc_status_str and qc_status_str.startswith("VERIFIABLE"):
+        return "VERIFIABLE"
+    return "NOT_VERIFIABLE"
 
-    
-    # 3. Geometry Analysis
-    h, w = img.shape[:2]
-    cx, cy = w // 2, h // 2 # Target is always center for fetched images
-    
-    result = analyze_buffers(cx, cy, panels, scale)
-    
-    # 4. Report
-    print("-" * 40)
-    print(f"Status      : {result['status']}")
-    print(f"QC Status   : {result['qc_status']}")
-    print(f"Zone ID     : {result['zone_id']}")
-    print(f"Total Area  : {result['total_area_sqft']:.2f} sq.ft")
-    print("-" * 40)
 
-    import json
-
-    output = {
-        "status": result["status"],
-        "qc_status": result["qc_status"],
-        "zone_id": result["zone_id"],
-        "total_area_sqft": round(result["total_area_sqft"], 2),
-        "assumptions": {
-            "meters_per_pixel": scale,
-            "buffer_1_sqft": 1200,
-            "buffer_2_sqft": 2400
+def process_sample(sample_id, lat, lon, predictor, quality_checker, visualizer):
+    out = {
+        "sample_id": sample_id,
+        "lat": lat,
+        "lon": lon,
+        "has_solar": False,
+        "confidence": 0.0,
+        "pv_area_sqm_est": 0.0,
+        "buffer_radius_sqft": 2400,
+        "qc_status": "NOT_VERIFIABLE",
+        "bbox_or_mask": "segmentation_mask",
+        "image_metadata": {
+            "source": "",
+            "capture_date": datetime.now().strftime("%Y-%m-%d")
         }
     }
 
-    with open("output_result.json", "w") as f:
-        json.dump(output, f, indent=2)
+   
+    pil_img, scale = fetch_satellite_image(lat, lon, radius_m=FETCH_RADIUS_METERS)
+    if pil_img is None:
+        out["qc_status"] = "NOT_VERIFIABLE"
+        out["image_metadata"]["source"] = "tile_fetch_failed"
+        return out
 
-    print("Saved results to output_result.json")
+    img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+    out["image_metadata"]["source"] = "Google Maps"
+
+    
+    is_verifiable, reason, metrics = quality_checker.is_verifiable(img)
+
+  
+    if not is_verifiable:
+        reason_map = {
+            "heavy_cloud": "cloud_coverage",
+            "low_resolution": "blur",
+            "heavy_shadow": "brightness",
+            "overexposed": "brightness",
+            "low_contrast": "contrast"
+        }
+        qc_reason = reason_map.get(reason, "image_quality")
+        out["qc_status"] = f"NOT_VERIFIABLE ({qc_reason})"
+      
+        return out
+
+   
+    panels = predictor.predict(img)
+    confidences = [p.get('confidence', 0.0) for p in panels if isinstance(p, dict)]
+    avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
+
+   
+    h, w = img.shape[:2]
+    cx, cy = w // 2, h // 2
+    result = analyze_buffers(
+        cx, cy, panels, scale,
+        cloud_coverage=metrics.get('cloud_coverage', 0.0),
+        blur_score=metrics.get('blur_score', 0.0),
+        brightness=metrics.get('brightness', 0.0),
+        contrast=metrics.get('contrast', 0.0)
+    )
+
+    vis = visualizer.create_visualization(
+        image=img,
+        cx=cx,
+        cy=cy,
+        panels=panels,
+        scale=scale,
+        result=result,
+        valid_panel_indices=result.get('valid_panel_indices', []),
+        quality_metrics=metrics
+    )
+
+    vis_filename = os.path.join(OUTPUT_DIR, f"viz_{sample_id}.jpg")
+    cv2.imwrite(vis_filename, vis)
+
+    out["has_solar"] = result['zone_id'] > 0
+    out["confidence"] = round(avg_conf, 2)
+    out["pv_area_sqm_est"] = round(result.get('total_area_sqm', 0.0), 2)
+    out["buffer_radius_sqft"] = 1200 if result['zone_id'] == 1 else 2400
+    out["qc_status"] = map_qc_base(result.get('qc_status'))
+
+    polygon_masks = result.get('polygon_masks', [])
+    out["bbox_or_mask"] = "segmentation_mask"
+
+    out["image_metadata"]["capture_date"] = datetime.now().strftime("%Y-%m-%d")
+
+    return out
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Batch runner for solar verification (Excel input)")
+    parser.add_argument("--input", "-i", default=INPUT_XLSX, help="Path to input .xlsx file")
+    parser.add_argument("--model", "-m", default=MODEL_PATH, help="Path to .pt model file")
+    parser.add_argument("--output", "-o", default=OUTPUT_DIR, help="Directory to write outputs")
+    parser.add_argument("--radius", "-r", type=float, default=FETCH_RADIUS_METERS, help="Fetch radius in meters for satellite image")
+    args = parser.parse_args()
 
-if __name__ == "__main__":
+    input_path = args.input
+    ext = os.path.splitext(input_path)[1].lower()
+    if ext in ['.xls', '.xlsx']:
+        df = pd.read_excel(input_path)
+    elif ext in ['.csv', '.txt']:
+        df = pd.read_csv(input_path)
+    else:
+        raise ValueError(f"Unsupported input format: {ext}")
+
+    os.makedirs(args.output, exist_ok=True)
+
+    
+    predictor = SolarPredictor(args.model)
+    quality_checker = ImageQualityChecker(cloud_threshold=0.3, blur_threshold=100)
+    visualizer = BufferVisualizer()
+
+    results = []
+
+    required_cols = ['sample_id', 'lat', 'lon']
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Input is missing required columns: {missing}")
+
+    for _, row in df.iterrows():
+        sample_id = row['sample_id']
+        lat = row['lat']
+        lon = row['lon']
+        print(f"Processing {sample_id}: {lat},{lon}")
+        try:
+            out = process_sample(int(sample_id), float(lat), float(lon), predictor, quality_checker, visualizer)
+            json_path = os.path.join(args.output, f"output_{sample_id}.json")
+            with open(json_path, 'w') as f:
+                json.dump(out, f, indent=2)
+            results.append(json_path)
+        except Exception as e:
+            print(f"Error processing {sample_id}: {e}")
+
+    print("Batch complete. Outputs:")
+    for p in results:
+        print(" -", p)
+
+
+if __name__ == '__main__':
     main()
