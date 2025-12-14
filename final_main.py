@@ -13,7 +13,7 @@ from src.geometry import analyze_buffers
 from src.visualizer import BufferVisualizer
 
 # Defaults (can be overridden via CLI)
-MODEL_PATH = "TRAINED_MODEL/best.pt"
+MODEL_PATH = "TRAINED_MODEL/detection_model.pt"
 INPUT_XLSX = "input_samples.xlsx"
 OUTPUT_DIR = "batch_output"
 FETCH_RADIUS_METERS = 50.0

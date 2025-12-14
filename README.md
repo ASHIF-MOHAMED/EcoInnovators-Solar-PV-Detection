@@ -40,7 +40,7 @@ A computer vision pipeline to detect solar panels and calculate their area withi
 Run the main script with your model and image:
 
 ```bash
-python main.py --image test_imgs/test1.jpg --model TRAINED_MODEL/best.pt
+python main.py --image test_imgs/test1.jpg --model TRAINED_MODEL/detection_model.pt
 ```
 
 ## Contributing
